@@ -1,0 +1,33 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+build/
+dist/
+
+# ===== 虚拟环境（1.1GB，不入库；用 setup.bat/setup.sh 重建） =====
+.venv/
+venv/
+env/
+
+# ===== 真实点云数据（数百 MB，不入库；仅保留说明文档） =====
+data/*
+!data/README.md
+
+# ===== 日志 =====
+*.log
+logs/
+
+# ===== 测试/压测临时产物 =====
+scripts/_pcdtest/
+*.pcd.bak
+
+# ===== 操作系统 / 编辑器 =====
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+*.swp
