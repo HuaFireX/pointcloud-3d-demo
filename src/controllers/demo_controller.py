@@ -580,6 +580,18 @@ class DemoController(QObject):
         self._window.status_bar.showMessage("叠加图层已清空", 3000)
         self._refresh_status_labels()
 
+    def _scalars_for_color_by(self, points):
+        """按当前"着色"下拉为流式/回放累积地图计算标量
+
+        流式与回放路径不保留 intensity（逐帧丢弃），故：
+        - z -> 用点云 z 坐标作标量（高度着色）
+        - intensity / solid -> 返回 None（单色）
+        """
+        color_by = self._window.cmb_color_by.currentData()
+        if color_by == "z":
+            return np.asarray(points, dtype=np.float32)[:, 2].copy()
+        return None
+
     def _prepare_display(self, points, scalars, color_by):
         """按着色方式计算要渲染的 (坐标, 标量)，并应用体素降采样"""
         if color_by == "z":
@@ -709,9 +721,18 @@ class DemoController(QObject):
         self._window.btn_play_pause.setText("播放")
         self._window.btn_seq_stop.setEnabled(True)
         self._window.lbl_seq_progress.setText(f"帧: 0/{len(files)}")
+
+        # 回放累积地图默认用 Z 高度着色（单色/强度对实时建图不直观）
+        color_note = ""
+        if self._window.cmb_color_by.currentData() in ("intensity", "solid"):
+            self._window.cmb_color_by.blockSignals(True)
+            self._window.cmb_color_by.setCurrentIndex(1)  # Z 高度
+            self._window.cmb_color_by.blockSignals(False)
+            color_note = " / 着色已切 Z 高度"
+
         self._window.status_bar.showMessage(
             f"回放序列已加载: {len(files)} 帧{pose_note}"
-            f"{'（步长 ' + str(stride) + '）' if stride > 1 else ''}，点播放开始",
+            f"{'（步长 ' + str(stride) + '）' if stride > 1 else ''}{color_note}，点播放开始",
             8000,
         )
 
@@ -806,6 +827,7 @@ class DemoController(QObject):
                     self._renderer.add_pointcloud(
                         PointcloudRenderer.LAYER_GLOBAL_MAP,
                         self._seq_accum,
+                        scalars=self._scalars_for_color_by(self._seq_accum),
                         color=self._state.render.global_map_color,
                         point_size=self._state.render.point_size,
                     )
@@ -875,6 +897,7 @@ class DemoController(QObject):
                 self._renderer.add_pointcloud(
                     PointcloudRenderer.LAYER_GLOBAL_MAP,
                     display_global,
+                    scalars=self._scalars_for_color_by(display_global),
                     color=render_cfg.global_map_color,
                     point_size=render_cfg.point_size,
                 )
