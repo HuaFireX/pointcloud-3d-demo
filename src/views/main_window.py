@@ -61,6 +61,14 @@ COLOR_BY_OPTIONS = [
     ("单色", "solid"),
 ]
 
+# 回放速度倍率：标签 -> 值（基于录制帧率 10Hz）
+PLAY_SPEED_OPTIONS = [
+    ("0.5x", 0.5),
+    ("1x", 1.0),
+    ("2x", 2.0),
+    ("4x", 4.0),
+]
+
 
 class MainWindow(QMainWindow):
     """Demo 主窗口"""
@@ -155,6 +163,32 @@ class MainWindow(QMainWindow):
 
         self.btn_clear_accumulated = QPushButton("清空累积")
         stream_layout.addWidget(self.btn_clear_accumulated)
+
+        # ---- 真实序列回放（用真实 pcd 逐帧播放，验证实时建图性能） ----
+        self.btn_load_seq = QPushButton("加载真实序列（用于回放）")
+        stream_layout.addWidget(self.btn_load_seq)
+
+        row = QHBoxLayout()
+        self.btn_play_pause = QPushButton("播放")
+        self.btn_play_pause.setEnabled(False)
+        self.btn_seq_stop = QPushButton("停止/重置")
+        self.btn_seq_stop.setEnabled(False)
+        row.addWidget(self.btn_play_pause)
+        row.addWidget(self.btn_seq_stop)
+        stream_layout.addLayout(row)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("回放速度："))
+        self.cmb_play_speed = QComboBox()
+        for label, value in PLAY_SPEED_OPTIONS:
+            self.cmb_play_speed.addItem(label, value)
+        self.cmb_play_speed.setCurrentIndex(1)  # 1x
+        row.addWidget(self.cmb_play_speed, 1)
+        stream_layout.addLayout(row)
+
+        self.lbl_seq_progress = QLabel("帧: -/-")
+        self.lbl_seq_progress.setStyleSheet("font-weight: bold;")
+        stream_layout.addWidget(self.lbl_seq_progress)
 
         panel_layout.addWidget(self.grp_stream)
 

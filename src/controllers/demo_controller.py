@@ -53,6 +53,16 @@ class DemoController(QObject):
         self._overlay_layers: dict = {}
         self._overlay_color_idx = 0
 
+        # 真实序列回放：逐帧播放真实 pcd，验证实时建图性能
+        self._seq_files: list = []
+        self._seq_poses = None
+        self._seq_index = 0
+        self._seq_playing = False
+        self._seq_accum: Optional[np.ndarray] = None
+        self._seq_since_global = 0
+        self._seq_timer = QTimer(self)
+        self._seq_timer.timeout.connect(self._on_seq_tick)
+
         # 实时流：模拟雷达旋转角度
         self._stream_yaw = 0.0
         self._stream_timer = QTimer(self)
@@ -99,6 +109,12 @@ class DemoController(QObject):
         w.cmb_stream_points.currentIndexChanged.connect(self._on_stream_config_changed)
         w.chk_accumulate.toggled.connect(self._on_accumulate_toggled)
         w.btn_clear_accumulated.clicked.connect(self._on_clear_accumulated)
+
+        # 真实序列回放
+        w.btn_load_seq.clicked.connect(self._on_load_sequence)
+        w.btn_play_pause.clicked.connect(self._on_play_pause)
+        w.btn_seq_stop.clicked.connect(self._on_seq_stop)
+        w.cmb_play_speed.currentIndexChanged.connect(self._on_play_speed_changed)
 
         # 文件加载
         w.btn_load_file.clicked.connect(self._on_load_file)
@@ -635,6 +651,172 @@ class DemoController(QObject):
         # 如果之前是场景生成的图层，需要提示用户
         self._window.status_bar.showMessage("累积点云已清空", 3000)
         self._refresh_status_labels()
+
+    # ================================================================
+    # 真实序列回放（逐帧播放真实 pcd，验证实时建图性能）
+    # ================================================================
+
+    def _on_load_sequence(self) -> None:
+        """加载一个目录作为回放序列（只记文件列表+位姿，不一次性渲染）"""
+        directory = self._window.open_directory_dialog()
+        if not directory:
+            return
+
+        pose_path = pose_source.find_pose_file(directory)
+        exclude = [pose_path] if pose_path is not None else []
+        try:
+            files = file_source.list_pointcloud_files(directory, exclude=exclude)
+        except Exception as e:
+            self._window.status_bar.showMessage(f"扫描目录失败: {e}", 8000)
+            return
+        if not files:
+            self._window.status_bar.showMessage(
+                f"目录下没有支持的点云文件: {directory}", 8000
+            )
+            return
+
+        poses = None
+        pose_note = ""
+        if pose_path is not None and self._window.chk_register.isChecked():
+            try:
+                _ts, positions, quaternions = pose_source.load_poses(pose_path)
+                if positions.shape[0] == len(files):
+                    poses = (positions, quaternions)
+                    pose_note = "（已配准）"
+            except Exception:
+                poses = None
+
+        stride = max(1, self._window.spn_stride.value())
+        if stride > 1:
+            files = files[::stride]
+            if poses is not None:
+                poses = (poses[0][::stride], poses[1][::stride])
+
+        # 停掉正在进行的回放，重置状态
+        self._seq_timer.stop()
+        self._seq_playing = False
+        self._seq_files = files
+        self._seq_poses = poses
+        self._seq_index = 0
+        self._seq_accum = None
+        self._seq_since_global = 0
+
+        self._renderer.remove_pointcloud(PointcloudRenderer.LAYER_GLOBAL_MAP)
+        self._renderer.remove_pointcloud(PointcloudRenderer.LAYER_CURRENT_FRAME)
+        self._renderer.render()
+
+        self._window.btn_play_pause.setEnabled(True)
+        self._window.btn_play_pause.setText("播放")
+        self._window.btn_seq_stop.setEnabled(True)
+        self._window.lbl_seq_progress.setText(f"帧: 0/{len(files)}")
+        self._window.status_bar.showMessage(
+            f"回放序列已加载: {len(files)} 帧{pose_note}"
+            f"{'（步长 ' + str(stride) + '）' if stride > 1 else ''}，点播放开始",
+            8000,
+        )
+
+    def _on_play_pause(self) -> None:
+        if not self._seq_files:
+            return
+        if self._seq_playing:
+            self._seq_timer.stop()
+            self._seq_playing = False
+            self._window.btn_play_pause.setText("播放")
+        else:
+            if self._seq_index >= len(self._seq_files):
+                # 播完了再点播放 = 从头开始
+                self._seq_index = 0
+                self._seq_accum = None
+                self._seq_since_global = 0
+                self._renderer.remove_pointcloud(PointcloudRenderer.LAYER_GLOBAL_MAP)
+            self._seq_playing = True
+            self._window.btn_play_pause.setText("暂停")
+            if self._seq_index == 0:
+                self._renderer.reset_camera()
+            self._restart_seq_timer()
+
+    def _on_play_speed_changed(self) -> None:
+        if self._seq_playing:
+            self._restart_seq_timer()
+
+    def _restart_seq_timer(self) -> None:
+        """按 录制帧率(10Hz) x 倍率 重启回放定时器"""
+        base_hz = 10.0
+        speed = float(self._window.cmb_play_speed.currentData() or 1.0)
+        interval = max(int(1000.0 / (base_hz * speed)), 10)
+        self._seq_timer.start(interval)
+
+    def _on_seq_stop(self) -> None:
+        self._seq_timer.stop()
+        self._seq_playing = False
+        self._seq_index = 0
+        self._seq_accum = None
+        self._seq_since_global = 0
+        self._renderer.remove_pointcloud(PointcloudRenderer.LAYER_CURRENT_FRAME)
+        self._renderer.remove_pointcloud(PointcloudRenderer.LAYER_GLOBAL_MAP)
+        self._renderer.render()
+        self._window.btn_play_pause.setText("播放")
+        self._window.lbl_seq_progress.setText(f"帧: 0/{len(self._seq_files)}")
+
+    def _on_seq_tick(self) -> None:
+        """回放单帧：读盘 -> 配准 -> 当前帧图层 + 累积全局地图（节流）"""
+        total = len(self._seq_files)
+        if self._seq_index >= total:
+            self._seq_timer.stop()
+            self._seq_playing = False
+            self._window.btn_play_pause.setText("播放")
+            self._window.status_bar.showMessage(f"回放完成: {total} 帧", 5000)
+            return
+
+        idx = self._seq_index
+        try:
+            pts, _inten = file_source.load_pointcloud(self._seq_files[idx])
+        except Exception:
+            pts = None
+
+        if pts is not None and pts.shape[0] > 0:
+            if self._seq_poses is not None:
+                pts = pose_source.transform_points(
+                    pts, self._seq_poses[0][idx], self._seq_poses[1][idx]
+                )
+
+            # 当前帧图层：点数少（~2k），每帧 remove+add 开销可忽略
+            self._renderer.remove_pointcloud(PointcloudRenderer.LAYER_CURRENT_FRAME)
+            self._renderer.add_pointcloud(
+                PointcloudRenderer.LAYER_CURRENT_FRAME,
+                pts,
+                color=self._state.render.current_frame_color,
+                point_size=max(self._state.render.point_size, 3.0),
+            )
+            self._renderer.set_pointcloud_visible(
+                PointcloudRenderer.LAYER_CURRENT_FRAME,
+                self._state.layers.current_frame_visible,
+            )
+
+            # 累积到全局地图，每 20 帧节流重建一次
+            if self._window.chk_accumulate.isChecked():
+                if self._seq_accum is None:
+                    self._seq_accum = pts.copy()
+                else:
+                    self._seq_accum = np.concatenate([self._seq_accum, pts], axis=0)
+                self._seq_since_global += 1
+                if self._seq_since_global >= 20:
+                    self._seq_since_global = 0
+                    self._renderer.remove_pointcloud(PointcloudRenderer.LAYER_GLOBAL_MAP)
+                    self._renderer.add_pointcloud(
+                        PointcloudRenderer.LAYER_GLOBAL_MAP,
+                        self._seq_accum,
+                        color=self._state.render.global_map_color,
+                        point_size=self._state.render.point_size,
+                    )
+                    self._renderer.set_pointcloud_visible(
+                        PointcloudRenderer.LAYER_GLOBAL_MAP,
+                        self._state.layers.global_map_visible,
+                    )
+
+        self._renderer.render()
+        self._seq_index += 1
+        self._window.lbl_seq_progress.setText(f"帧: {self._seq_index}/{total}")
 
     def _on_stream_tick(self) -> None:
         """实时流单帧回调"""
