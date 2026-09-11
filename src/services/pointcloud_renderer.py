@@ -14,7 +14,7 @@ from typing import Dict, Optional
 import numpy as np
 import pyvista as pv
 import vtk
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QEvent, Signal
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 from pyvistaqt import QtInteractor
 
@@ -25,10 +25,12 @@ class PointcloudRenderer(QWidget):
     信号：
     - measurement_changed(float): 距离测量值变化（米）
     - point_picked(object): 点拾取，参数为 (3,) numpy 数组
+    - wheel_scrolled(int): 滚轮滚动（angleDelta.y），仅在 wheel 捕获开启时发射
     """
 
     measurement_changed = Signal(float)
     point_picked = Signal(object)
+    wheel_scrolled = Signal(int)
 
     # 图层名常量
     LAYER_GLOBAL_MAP = "global_map"
@@ -47,6 +49,11 @@ class PointcloudRenderer(QWidget):
 
         self._plotter.set_background(background)
         self._plotter.add_axes()
+
+        # 滚轮捕获：开启时拦截 3D 视图滚轮事件（供旁观者视角调距离），
+        # 关闭时放行给 VTK 默认缩放
+        self._wheel_capture = False
+        self._plotter.interactor.installEventFilter(self)
 
         # 图层管理：name -> (mesh, actor, mapper)
         self._pointcloud_layers: Dict[str, tuple[pv.PolyData, object, object]] = {}
@@ -374,6 +381,25 @@ class PointcloudRenderer(QWidget):
             self._edl_enabled = enabled
         except Exception:
             self._edl_enabled = False
+
+    # ================================================================
+    # 滚轮捕获（旁观者视角调距离）
+    # ================================================================
+
+    def set_wheel_capture(self, enabled: bool) -> None:
+        """开启/拦截 3D 视图滚轮事件
+
+        开启时滚轮不再触发 VTK 默认缩放，而是发射 wheel_scrolled 信号，
+        由 controller 用于调整旁观者视角离车距离。
+        """
+        self._wheel_capture = bool(enabled)
+
+    def eventFilter(self, obj, event) -> bool:
+        """拦截 interactor 的滚轮事件（捕获开启时）"""
+        if event.type() == QEvent.Type.Wheel and self._wheel_capture:
+            self.wheel_scrolled.emit(int(event.angleDelta().y()))
+            return True  # 消费事件，阻止 VTK 默认缩放
+        return super().eventFilter(obj, event)
 
     # ================================================================
     # 渲染 & 底层访问

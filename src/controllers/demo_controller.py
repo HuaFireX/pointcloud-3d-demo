@@ -70,6 +70,9 @@ class DemoController(QObject):
         # AGV 占位车模型基础网格（原点处），回放时按位姿变换
         self._car_base_mesh = None
 
+        # 旁观者视角离车距离（米），滚轮调节
+        self._observer_dist = 23.0
+
         # 实时流：模拟雷达旋转角度
         self._stream_yaw = 0.0
         self._stream_timer = QTimer(self)
@@ -123,6 +126,7 @@ class DemoController(QObject):
         w.btn_seq_stop.clicked.connect(self._on_seq_stop)
         w.cmb_play_speed.currentIndexChanged.connect(self._on_play_speed_changed)
         w.cmb_view_mode.currentIndexChanged.connect(self._on_view_mode_changed)
+        self._renderer.wheel_scrolled.connect(self._on_observer_wheel)
 
         # 文件加载
         w.btn_load_file.clicked.connect(self._on_load_file)
@@ -866,12 +870,38 @@ class DemoController(QObject):
         self._window.lbl_seq_progress.setText(f"帧: {self._seq_index}/{total}")
 
     def _on_view_mode_changed(self) -> None:
-        """切换回放视角：重置平滑状态避免相机从旧位置猛跳；上帝视角立即 fit 全局"""
+        """切换回放视角：重置平滑状态避免相机从旧位置猛跳；上帝视角立即 fit 全局
+
+        旁观者视角开启滚轮捕获（滚轮调离车距离），其余视角放行给 VTK 缩放。
+        """
         self._follow_cam_pos = None
         self._follow_cam_focal = None
-        if self._window.cmb_view_mode.currentData() == "god":
+        mode = self._window.cmb_view_mode.currentData()
+        self._renderer.set_wheel_capture(mode == "observer")
+        if mode == "god":
             self._renderer.reset_camera()
             self._renderer.render()
+
+    def _on_observer_wheel(self, delta: int) -> None:
+        """旁观者视角滚轮：调节离车距离（上滚拉近、下滚拉远）"""
+        if self._window.cmb_view_mode.currentData() != "observer":
+            return
+        # delta>0 上滚 -> 拉近；步长随当前距离自适应
+        step = max(0.5, self._observer_dist * 0.08)
+        if delta > 0:
+            self._observer_dist = max(5.0, self._observer_dist - step)
+        elif delta < 0:
+            self._observer_dist = min(80.0, self._observer_dist + step)
+        else:
+            return
+
+        # 立即重算相机（含暂停时），并给出距离反馈
+        if self._seq_poses is not None and self._seq_index > 0:
+            self._update_playback_camera(self._seq_index - 1)
+            self._renderer.render()
+        self._window.status_bar.showMessage(
+            f"旁观者距离: {self._observer_dist:.1f} m", 1500
+        )
 
     def _update_playback_camera(self, idx: int) -> None:
         """按当前回放视角模式设置相机（平滑插值消除抖动）
@@ -898,14 +928,16 @@ class DemoController(QObject):
         up = np.array([0.0, 0.0, 1.0])
 
         if mode == "observer":
-            # 斜向侧俯视：右侧 + 上方 + 稍后，离车约 22m
+            # 斜向侧俯视：右侧 + 上方 + 稍后；距离由滚轮调节（_observer_dist）
             right = np.cross(forward, up)
             rn = float(np.linalg.norm(right))
             if rn < 1e-6:
                 right = np.array([0.0, -1.0, 0.0])
             else:
                 right = right / rn
-            target_pos = pos + right * 18.0 + up * 12.0 - forward * 6.0
+            base_offset = right * 18.0 + up * 12.0 - forward * 6.0  # 模长 ~23m
+            scale = self._observer_dist / 23.0
+            target_pos = pos + base_offset * scale
             target_focal = pos + forward * 2.0
             up_vec = (0.0, 0.0, 1.0)
             alpha = 0.25
