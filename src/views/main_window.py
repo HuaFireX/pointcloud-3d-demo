@@ -190,6 +190,10 @@ class MainWindow(QMainWindow):
         self.lbl_seq_progress.setStyleSheet("font-weight: bold;")
         stream_layout.addWidget(self.lbl_seq_progress)
 
+        self.chk_follow = QCheckBox("跟随小车视角（回放时相机跟车）")
+        self.chk_follow.setChecked(True)
+        stream_layout.addWidget(self.chk_follow)
+
         panel_layout.addWidget(self.grp_stream)
 
         # ========== 3. 文件加载 ==========

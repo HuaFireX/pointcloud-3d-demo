@@ -63,6 +63,10 @@ class DemoController(QObject):
         self._seq_timer = QTimer(self)
         self._seq_timer.timeout.connect(self._on_seq_tick)
 
+        # 跟随小车视角：平滑相机状态（相机位置 / 注视点），None 表示下一帧直接吸附
+        self._follow_cam_pos: Optional[np.ndarray] = None
+        self._follow_cam_focal: Optional[np.ndarray] = None
+
         # 实时流：模拟雷达旋转角度
         self._stream_yaw = 0.0
         self._stream_timer = QTimer(self)
@@ -115,6 +119,7 @@ class DemoController(QObject):
         w.btn_play_pause.clicked.connect(self._on_play_pause)
         w.btn_seq_stop.clicked.connect(self._on_seq_stop)
         w.cmb_play_speed.currentIndexChanged.connect(self._on_play_speed_changed)
+        w.chk_follow.toggled.connect(self._on_follow_toggled)
 
         # 文件加载
         w.btn_load_file.clicked.connect(self._on_load_file)
@@ -712,6 +717,8 @@ class DemoController(QObject):
         self._seq_index = 0
         self._seq_accum = None
         self._seq_since_global = 0
+        self._follow_cam_pos = None
+        self._follow_cam_focal = None
 
         self._renderer.remove_pointcloud(PointcloudRenderer.LAYER_GLOBAL_MAP)
         self._renderer.remove_pointcloud(PointcloudRenderer.LAYER_CURRENT_FRAME)
@@ -753,7 +760,12 @@ class DemoController(QObject):
             self._seq_playing = True
             self._window.btn_play_pause.setText("暂停")
             if self._seq_index == 0:
-                self._renderer.reset_camera()
+                if self._window.chk_follow.isChecked():
+                    # 跟随模式：重置平滑状态，首帧直接吸附到车后
+                    self._follow_cam_pos = None
+                    self._follow_cam_focal = None
+                else:
+                    self._renderer.reset_camera()
             self._restart_seq_timer()
 
     def _on_play_speed_changed(self) -> None:
@@ -773,6 +785,8 @@ class DemoController(QObject):
         self._seq_index = 0
         self._seq_accum = None
         self._seq_since_global = 0
+        self._follow_cam_pos = None
+        self._follow_cam_focal = None
         self._renderer.remove_pointcloud(PointcloudRenderer.LAYER_CURRENT_FRAME)
         self._renderer.remove_pointcloud(PointcloudRenderer.LAYER_GLOBAL_MAP)
         self._renderer.render()
@@ -836,9 +850,51 @@ class DemoController(QObject):
                         self._state.layers.global_map_visible,
                     )
 
+        if self._window.chk_follow.isChecked() and self._seq_poses is not None:
+            self._update_follow_camera(idx)
+
         self._renderer.render()
         self._seq_index += 1
         self._window.lbl_seq_progress.setText(f"帧: {self._seq_index}/{total}")
+
+    def _on_follow_toggled(self, _enabled: bool) -> None:
+        """切换跟随开关：重置平滑状态，避免相机从旧位置猛跳"""
+        self._follow_cam_pos = None
+        self._follow_cam_focal = None
+
+    def _update_follow_camera(self, idx: int) -> None:
+        """跟随小车视角：相机置于车后上方、注视车前方，平滑插值消除抖动
+
+        朝向取位姿四元数旋转后的 +X（车头）方向，投影到水平面。
+        """
+        pos = np.asarray(self._seq_poses[0][idx], dtype=np.float64)
+        rot = pose_source.quat_to_matrix(self._seq_poses[1][idx])
+        forward = rot @ np.array([1.0, 0.0, 0.0])
+        forward[2] = 0.0
+        fn = float(np.linalg.norm(forward))
+        if fn < 1e-6:
+            forward = np.array([1.0, 0.0, 0.0])
+        else:
+            forward = forward / fn
+        up = np.array([0.0, 0.0, 1.0])
+
+        target_focal = pos + forward * 4.0 + up * 0.5
+        target_pos = pos - forward * 12.0 + up * 7.0
+
+        if self._follow_cam_pos is None or self._follow_cam_focal is None:
+            self._follow_cam_pos = target_pos.copy()
+            self._follow_cam_focal = target_focal.copy()
+        else:
+            alpha = 0.25
+            self._follow_cam_pos = self._follow_cam_pos * (1.0 - alpha) + target_pos * alpha
+            self._follow_cam_focal = self._follow_cam_focal * (1.0 - alpha) + target_focal * alpha
+
+        plotter = self._renderer.get_plotter()
+        plotter.camera_position = [
+            tuple(float(v) for v in self._follow_cam_pos),
+            tuple(float(v) for v in self._follow_cam_focal),
+            (0.0, 0.0, 1.0),
+        ]
 
     def _on_stream_tick(self) -> None:
         """实时流单帧回调"""
