@@ -122,7 +122,7 @@ class DemoController(QObject):
         w.btn_play_pause.clicked.connect(self._on_play_pause)
         w.btn_seq_stop.clicked.connect(self._on_seq_stop)
         w.cmb_play_speed.currentIndexChanged.connect(self._on_play_speed_changed)
-        w.chk_follow.toggled.connect(self._on_follow_toggled)
+        w.cmb_view_mode.currentIndexChanged.connect(self._on_view_mode_changed)
 
         # 文件加载
         w.btn_load_file.clicked.connect(self._on_load_file)
@@ -763,12 +763,13 @@ class DemoController(QObject):
             self._seq_playing = True
             self._window.btn_play_pause.setText("暂停")
             if self._seq_index == 0:
-                if self._window.chk_follow.isChecked():
-                    # 跟随模式：重置平滑状态，首帧直接吸附到车后
+                if self._window.cmb_view_mode.currentData() == "god":
+                    # 上帝视角：固定全局俯瞰，起始 fit 全场景
+                    self._renderer.reset_camera()
+                else:
+                    # 跟随类视角：重置平滑状态，首帧直接吸附
                     self._follow_cam_pos = None
                     self._follow_cam_focal = None
-                else:
-                    self._renderer.reset_camera()
             self._restart_seq_timer()
 
     def _on_play_speed_changed(self) -> None:
@@ -853,8 +854,9 @@ class DemoController(QObject):
                         self._state.layers.global_map_visible,
                     )
 
-        if self._window.chk_follow.isChecked() and self._seq_poses is not None:
-            self._update_follow_camera(idx)
+        # 回放视角相机（第一人称/第三人称/俯视跟随；上帝视角固定不动）
+        if self._seq_poses is not None:
+            self._update_playback_camera(idx)
 
         # 车模型跟随当前帧位姿
         self._update_car_model_pose(idx)
@@ -863,16 +865,27 @@ class DemoController(QObject):
         self._seq_index += 1
         self._window.lbl_seq_progress.setText(f"帧: {self._seq_index}/{total}")
 
-    def _on_follow_toggled(self, _enabled: bool) -> None:
-        """切换跟随开关：重置平滑状态，避免相机从旧位置猛跳"""
+    def _on_view_mode_changed(self) -> None:
+        """切换回放视角：重置平滑状态避免相机从旧位置猛跳；上帝视角立即 fit 全局"""
         self._follow_cam_pos = None
         self._follow_cam_focal = None
+        if self._window.cmb_view_mode.currentData() == "god":
+            self._renderer.reset_camera()
+            self._renderer.render()
 
-    def _update_follow_camera(self, idx: int) -> None:
-        """跟随小车视角：相机置于车后上方、注视车前方，平滑插值消除抖动
+    def _update_playback_camera(self, idx: int) -> None:
+        """按当前回放视角模式设置相机（平滑插值消除抖动）
 
+        - first  第一人称：相机在车上（略高于车体），平视车头方向
+        - third  第三人称：车后上方跟随，注视车前方（原跟随视角）
+        - top    俯视跟随：车正上方往下看，跟随位置、北向上
+        - god    上帝视角：固定全局俯瞰，不跟随（tick 内直接返回）
         朝向取位姿四元数旋转后的 +X（车头）方向，投影到水平面。
         """
+        mode = self._window.cmb_view_mode.currentData()
+        if mode == "god":
+            return
+
         pos = np.asarray(self._seq_poses[0][idx], dtype=np.float64)
         rot = pose_source.quat_to_matrix(self._seq_poses[1][idx])
         forward = rot @ np.array([1.0, 0.0, 0.0])
@@ -884,14 +897,26 @@ class DemoController(QObject):
             forward = forward / fn
         up = np.array([0.0, 0.0, 1.0])
 
-        target_focal = pos + forward * 4.0 + up * 0.5
-        target_pos = pos - forward * 12.0 + up * 7.0
+        if mode == "first":
+            target_pos = pos + up * 1.2
+            target_focal = pos + forward * 10.0 + up * 0.2
+            up_vec = (0.0, 0.0, 1.0)
+            alpha = 0.5
+        elif mode == "top":
+            target_pos = pos + up * 45.0
+            target_focal = pos.copy()
+            up_vec = (0.0, 1.0, 0.0)  # 北向上，地图方向稳定
+            alpha = 0.3
+        else:  # third
+            target_focal = pos + forward * 4.0 + up * 0.5
+            target_pos = pos - forward * 12.0 + up * 7.0
+            up_vec = (0.0, 0.0, 1.0)
+            alpha = 0.25
 
         if self._follow_cam_pos is None or self._follow_cam_focal is None:
             self._follow_cam_pos = target_pos.copy()
             self._follow_cam_focal = target_focal.copy()
         else:
-            alpha = 0.25
             self._follow_cam_pos = self._follow_cam_pos * (1.0 - alpha) + target_pos * alpha
             self._follow_cam_focal = self._follow_cam_focal * (1.0 - alpha) + target_focal * alpha
 
@@ -899,7 +924,7 @@ class DemoController(QObject):
         plotter.camera_position = [
             tuple(float(v) for v in self._follow_cam_pos),
             tuple(float(v) for v in self._follow_cam_focal),
-            (0.0, 0.0, 1.0),
+            up_vec,
         ]
 
     def _on_stream_tick(self) -> None:
