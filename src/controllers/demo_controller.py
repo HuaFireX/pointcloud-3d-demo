@@ -67,6 +67,9 @@ class DemoController(QObject):
         self._follow_cam_pos: Optional[np.ndarray] = None
         self._follow_cam_focal: Optional[np.ndarray] = None
 
+        # AGV 占位车模型基础网格（原点处），回放时按位姿变换
+        self._car_base_mesh = None
+
         # 实时流：模拟雷达旋转角度
         self._stream_yaw = 0.0
         self._stream_timer = QTimer(self)
@@ -853,6 +856,9 @@ class DemoController(QObject):
         if self._window.chk_follow.isChecked() and self._seq_poses is not None:
             self._update_follow_camera(idx)
 
+        # 车模型跟随当前帧位姿
+        self._update_car_model_pose(idx)
+
         self._renderer.render()
         self._seq_index += 1
         self._window.lbl_seq_progress.setText(f"帧: {self._seq_index}/{total}")
@@ -1017,18 +1023,44 @@ class DemoController(QObject):
     def _on_layer_car_toggled(self, visible: bool) -> None:
         self._state.layers.car_model_visible = visible
         if visible:
-            # 用简单立方体占位表示 AGV，实际集成时替换为真实 .obj/.stl
-            import pyvista as pv
-
-            car_mesh = pv.Box(bounds=(-0.6, 0.6, -0.4, 0.4, 0.0, 0.4))
-            self._renderer.add_mesh_model(
-                PointcloudRenderer.LAYER_CAR_MODEL,
-                car_mesh,
-                color=self._state.render.car_model_color,
-            )
+            # 回放中则直接放到当前帧位姿，否则放原点
+            if self._seq_playing and self._seq_poses is not None and self._seq_index > 0:
+                self._update_car_model_pose(self._seq_index - 1)
+            else:
+                self._renderer.add_mesh_model(
+                    PointcloudRenderer.LAYER_CAR_MODEL,
+                    self._get_car_base_mesh(),
+                    color=self._state.render.car_model_color,
+                )
         else:
             self._renderer.remove_mesh_model(PointcloudRenderer.LAYER_CAR_MODEL)
         self._renderer.render()
+
+    def _get_car_base_mesh(self):
+        """AGV 占位车模型（原点处立方体），缓存复用；实际集成替换为真实 .obj/.stl"""
+        if self._car_base_mesh is None:
+            import pyvista as pv
+
+            self._car_base_mesh = pv.Box(bounds=(-0.6, 0.6, -0.4, 0.4, 0.0, 0.4))
+        return self._car_base_mesh
+
+    def _update_car_model_pose(self, idx: int) -> None:
+        """把车模型变换到第 idx 帧位姿（位置+四元数朝向）"""
+        if not self._state.layers.car_model_visible or self._seq_poses is None:
+            return
+        base = self._get_car_base_mesh()
+        rot = pose_source.quat_to_matrix(self._seq_poses[1][idx])
+        pos = np.asarray(self._seq_poses[0][idx], dtype=np.float64)
+        mesh = base.copy()
+        mesh.points = (np.asarray(base.points, dtype=np.float64) @ rot.T + pos).astype(
+            np.float32
+        )
+        self._renderer.remove_mesh_model(PointcloudRenderer.LAYER_CAR_MODEL)
+        self._renderer.add_mesh_model(
+            PointcloudRenderer.LAYER_CAR_MODEL,
+            mesh,
+            color=self._state.render.car_model_color,
+        )
 
     # ================================================================
     # 剖面
