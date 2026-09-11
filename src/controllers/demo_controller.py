@@ -876,10 +876,10 @@ class DemoController(QObject):
     def _update_playback_camera(self, idx: int) -> None:
         """按当前回放视角模式设置相机（平滑插值消除抖动）
 
-        - first  第一人称：相机在车上（略高于车体），平视车头方向
-        - third  第三人称：车后上方跟随，注视车前方（原跟随视角）
-        - top    俯视跟随：车正上方往下看，跟随位置、北向上
-        - god    上帝视角：固定全局俯瞰，不跟随（tick 内直接返回）
+        - third    车后跟随：车后上方跟随，注视车前方
+        - observer 旁观者：斜向侧俯视跟随，离车较远（右侧+上方+稍后）
+        - top      俯视跟随：车正上方往下看，跟随位置、北向上
+        - god      上帝视角：固定全局俯瞰，不跟随（tick 内直接返回）
         朝向取位姿四元数旋转后的 +X（车头）方向，投影到水平面。
         """
         mode = self._window.cmb_view_mode.currentData()
@@ -897,17 +897,24 @@ class DemoController(QObject):
             forward = forward / fn
         up = np.array([0.0, 0.0, 1.0])
 
-        if mode == "first":
-            target_pos = pos + up * 1.2
-            target_focal = pos + forward * 10.0 + up * 0.2
+        if mode == "observer":
+            # 斜向侧俯视：右侧 + 上方 + 稍后，离车约 22m
+            right = np.cross(forward, up)
+            rn = float(np.linalg.norm(right))
+            if rn < 1e-6:
+                right = np.array([0.0, -1.0, 0.0])
+            else:
+                right = right / rn
+            target_pos = pos + right * 18.0 + up * 12.0 - forward * 6.0
+            target_focal = pos + forward * 2.0
             up_vec = (0.0, 0.0, 1.0)
-            alpha = 0.5
+            alpha = 0.25
         elif mode == "top":
             target_pos = pos + up * 45.0
             target_focal = pos.copy()
             up_vec = (0.0, 1.0, 0.0)  # 北向上，地图方向稳定
             alpha = 0.3
-        else:  # third
+        else:  # third 车后跟随
             target_focal = pos + forward * 4.0 + up * 0.5
             target_pos = pos - forward * 12.0 + up * 7.0
             up_vec = (0.0, 0.0, 1.0)

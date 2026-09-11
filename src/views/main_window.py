@@ -71,8 +71,8 @@ PLAY_SPEED_OPTIONS = [
 
 # 回放视角模式：标签 -> 值
 VIEW_MODE_OPTIONS = [
-    ("第一人称（车上平视）", "first"),
-    ("第三人称（车后跟随）", "third"),
+    ("车后跟随视角", "third"),
+    ("旁观者视角（斜侧俯视跟随）", "observer"),
     ("俯视跟随（正上往下看）", "top"),
     ("上帝视角（固定全局）", "god"),
 ]
@@ -203,7 +203,7 @@ class MainWindow(QMainWindow):
         self.cmb_view_mode = QComboBox()
         for label, value in VIEW_MODE_OPTIONS:
             self.cmb_view_mode.addItem(label, value)
-        self.cmb_view_mode.setCurrentIndex(1)  # 第三人称（= 原跟随视角）
+        self.cmb_view_mode.setCurrentIndex(0)  # 车后跟随视角
         row.addWidget(self.cmb_view_mode, 1)
         stream_layout.addLayout(row)
 
