@@ -223,6 +223,9 @@ class MainWindow(QMainWindow):
         self.chk_register.setChecked(True)
         file_layout.addWidget(self.chk_register)
 
+        self.btn_export_pcd = QPushButton("导出合并点云为 PCD")
+        file_layout.addWidget(self.btn_export_pcd)
+
         row = QHBoxLayout()
         row.addWidget(QLabel("加载步长："))
         self.spn_stride = QSpinBox()
@@ -455,6 +458,13 @@ class MainWindow(QMainWindow):
     def open_directory_dialog(self) -> Optional[str]:
         """弹出目录选择对话框，返回目录路径或 None"""
         path = QFileDialog.getExistingDirectory(self, "选择包含点云文件的目录", "")
+        return path if path else None
+
+    def open_save_pcd_dialog(self, default_name: str) -> Optional[str]:
+        """弹出 PCD 保存对话框，返回路径或 None"""
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出合并点云为 PCD", default_name, "PCD 点云 (*.pcd)"
+        )
         return path if path else None
 
     def add_overlay_toggle(self, name: str, color_text: str) -> QCheckBox:

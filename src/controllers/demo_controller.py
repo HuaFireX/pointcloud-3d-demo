@@ -48,6 +48,7 @@ class DemoController(QObject):
         # 文件/目录加载的原始点云缓存（切换着色方式时免重读文件）
         self._loaded_points: Optional[np.ndarray] = None
         self._loaded_scalars: Optional[np.ndarray] = None
+        self._last_loaded_dir: Optional[str] = None
 
         # 叠加图层：name -> (color, checkbox)，每个目录一个独立图层
         self._overlay_layers: dict = {}
@@ -133,6 +134,7 @@ class DemoController(QObject):
         w.btn_load_dir.clicked.connect(self._on_load_directory)
         w.btn_add_dir_layer.clicked.connect(self._on_add_dir_layer)
         w.btn_clear_overlay.clicked.connect(self._on_clear_overlay_layers)
+        w.btn_export_pcd.clicked.connect(self._on_export_pcd)
 
         # 渲染参数
         w.sld_point_size.valueChanged.connect(self._on_point_size_changed)
@@ -247,6 +249,7 @@ class DemoController(QObject):
         directory = self._window.open_directory_dialog()
         if not directory:
             return
+        self._last_loaded_dir = directory
 
         # 位姿文件是 .txt 但并非点云，必须先排除，否则会被误解析成垃圾点
         pose_path = pose_source.find_pose_file(directory)
@@ -414,6 +417,35 @@ class DemoController(QObject):
             ds2_sca = None
         note = f" / 预算降采样 voxel={coarse_voxel:.2f}m -> {ds2_pts.shape[0]:,} 点"
         return ds2_pts, ds2_sca, note
+
+    def _on_export_pcd(self) -> None:
+        """把当前合并（配准后）点云导出为单个完整 PCD 文件"""
+        if self._loaded_points is None or self._loaded_points.shape[0] == 0:
+            self._window.status_bar.showMessage("请先加载文件或目录再导出", 5000)
+            return
+
+        if self._last_loaded_dir:
+            base = os.path.basename(os.path.normpath(self._last_loaded_dir))
+            default_name = f"{base}_merged.pcd"
+        else:
+            default_name = "merged.pcd"
+
+        path = self._window.open_save_pcd_dialog(default_name)
+        if not path:
+            return
+        if not path.lower().endswith(".pcd"):
+            path += ".pcd"
+
+        try:
+            n = file_source.save_pcd(path, self._loaded_points, self._loaded_scalars)
+        except Exception as e:
+            self._window.status_bar.showMessage(f"导出失败: {e}", 8000)
+            return
+
+        size_mb = os.path.getsize(path) / (1024 * 1024)
+        self._window.status_bar.showMessage(
+            f"已导出 {n:,} 点 -> {path} ({size_mb:.1f} MB)", 10000
+        )
 
     def _load_registered(self, paths, poses, progress_callback=None, max_workers: int = 8):
         """按位姿配准加载：第 i 帧点云用第 i 行位姿变换到世界系后合并（线程池并行）

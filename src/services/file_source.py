@@ -221,6 +221,64 @@ def load_multiple(
 
 
 # ================================================================
+# PCD 写出
+# ================================================================
+
+
+def save_pcd(
+    path: str | Path,
+    points: np.ndarray,
+    scalars: Optional[np.ndarray] = None,
+    binary: bool = True,
+) -> int:
+    """把点云写成单个 PCD 文件（与解析器格式对齐，可被本模块/VTK/PCL 读回）
+
+    Args:
+        path: 输出路径（.pcd）
+        points: (N, 3) 坐标
+        scalars: (N,) 强度标量或 None；有则写 FIELDS x y z intensity
+        binary: True 写 binary（紧凑快速），False 写 ascii
+
+    Returns:
+        写出的点数 N
+    """
+    pts = np.asarray(points, dtype=np.float32)
+    n = int(pts.shape[0])
+    has_int = scalars is not None and np.asarray(scalars).shape[0] == n
+
+    fields = ["x", "y", "z", "intensity"] if has_int else ["x", "y", "z"]
+    nf = len(fields)
+    header = (
+        "# .PCD v0.7 - Point Cloud Data file format\n"
+        "VERSION 0.7\n"
+        f"FIELDS {' '.join(fields)}\n"
+        f"SIZE {' '.join(['4'] * nf)}\n"
+        f"TYPE {' '.join(['F'] * nf)}\n"
+        f"COUNT {' '.join(['1'] * nf)}\n"
+        f"WIDTH {n}\n"
+        "HEIGHT 1\n"
+        "VIEWPOINT 0 0 0 1 0 0 0\n"
+        f"POINTS {n}\n"
+        f"DATA {'binary' if binary else 'ascii'}\n"
+    )
+
+    with open(path, "wb") as f:
+        f.write(header.encode("ascii"))
+        if binary:
+            dtype = np.dtype([(name, "<f4") for name in fields])
+            arr = np.zeros(n, dtype=dtype)
+            arr["x"], arr["y"], arr["z"] = pts[:, 0], pts[:, 1], pts[:, 2]
+            if has_int:
+                arr["intensity"] = np.asarray(scalars, dtype=np.float32)
+            f.write(arr.tobytes())
+        else:
+            data = np.column_stack([pts, np.asarray(scalars, dtype=np.float32)]) if has_int else pts
+            np.savetxt(f, data, fmt="%.6f")
+
+    return n
+
+
+# ================================================================
 # PCD 原生解析
 # ================================================================
 
