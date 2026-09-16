@@ -359,7 +359,12 @@ class PointcloudRenderer(QWidget):
                 pass
             self._pick_enabled = False
 
-    def _on_point_picked(self, picked_point) -> None:
+    def _on_point_picked(self, picked_point, _picker=None) -> None:
+        """点拾取回调
+
+        pyvista 0.49 在 use_picker=True 时以 callback(point, picker) 两参调用，
+        旧版仅传 point；这里用可选第二参兼容两种签名。
+        """
         pt = np.asarray(picked_point, dtype=np.float64).ravel()
         if pt.size >= 3:
             self.point_picked.emit(pt[:3])
