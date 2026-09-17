@@ -357,7 +357,9 @@ class DemoController(QObject):
         hint = ""
         if scalars is not None and scalars.size and float(np.ptp(scalars)) < 1e-9:
             self._window.cmb_color_by.blockSignals(True)
-            self._window.cmb_color_by.setCurrentIndex(1)  # Z 高度
+            self._window.cmb_color_by.setCurrentIndex(
+                self._window.cmb_color_by.findData("z")
+            )
             self._window.cmb_color_by.blockSignals(False)
             hint = " / intensity 全同值，已自动切 Z 高度着色"
 
@@ -772,7 +774,9 @@ class DemoController(QObject):
         color_note = ""
         if self._window.cmb_color_by.currentData() in ("intensity", "solid"):
             self._window.cmb_color_by.blockSignals(True)
-            self._window.cmb_color_by.setCurrentIndex(1)  # Z 高度
+            self._window.cmb_color_by.setCurrentIndex(
+                self._window.cmb_color_by.findData("z")
+            )
             self._window.cmb_color_by.blockSignals(False)
             color_note = " / 着色已切 Z 高度"
 
